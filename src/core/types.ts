@@ -46,6 +46,8 @@ export interface IntegrationConfig {
   githubOwner?: string;
   /** GitHub repository name */
   githubRepo?: string;
+  /** API key for management endpoints */
+  apiKey?: string;
 }
 
 /**

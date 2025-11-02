@@ -28,6 +28,7 @@ const ENV_MAPPING = {
   githubToken: "GITHUB_TOKEN",
   githubOwner: "GITHUB_OWNER",
   githubRepo: "GITHUB_REPO",
+  apiKey: "API_KEY",
 } as const;
 
 /**

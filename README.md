@@ -199,8 +199,21 @@ npm run test:integration
 
 - Always use HTTPS in production
 - Configure webhook secret for signature verification
+- **Set API_KEY environment variable** to secure management endpoints (`/sessions`, `/stats`, `/config`, etc.)
 - Rotate Linear API tokens regularly
 - Implement rate limiting before production deployment
+
+**API Key Setup** (Recommended):
+```bash
+# Generate a secure key
+openssl rand -hex 32
+
+# Add to .env
+API_KEY=your-generated-key
+
+# Use with management endpoints
+curl -H "X-API-Key: your-key" http://localhost:3006/sessions
+```
 
 ## 🗺️ Roadmap
 

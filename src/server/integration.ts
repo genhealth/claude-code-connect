@@ -153,6 +153,29 @@ export class IntegrationServer {
   }
 
   /**
+   * Authentication middleware for management endpoints
+   */
+  private requireApiKey(request: FastifyRequest, reply: FastifyReply): void {
+    if (!this.config.apiKey) {
+      // If no API key is configured, allow access (for backward compatibility)
+      return;
+    }
+
+    const apiKey = request.headers['x-api-key'] as string;
+    if (!apiKey || apiKey !== this.config.apiKey) {
+      this.logger.warn("Unauthorized access attempt to management endpoint", {
+        path: request.url,
+        ip: request.ip,
+        hasKey: !!apiKey
+      });
+      reply.code(401).send({
+        error: "Unauthorized",
+        message: "Valid API key required"
+      });
+    }
+  }
+
+  /**
    * Setup HTTP routes
    */
   private setupRoutes(): void {
@@ -180,8 +203,10 @@ export class IntegrationServer {
     this.app.post<WebhookRequest>(
       "/webhooks/linear",
       async (request, reply) => {
-        const signature = request.headers["linear-signature"];
-        const userAgent = request.headers["user-agent"];
+        const signatureHeader = request.headers["linear-signature"];
+        const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
+        const userAgentHeader = request.headers["user-agent"];
+        const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : userAgentHeader;
         const clientIp = request.ip;
         const payloadString = JSON.stringify(request.body);
         const sourceIp = clientIp || "unknown";
@@ -200,9 +225,9 @@ export class IntegrationServer {
           await this.webhookRateLimiter.consume(clientIp);
         } catch (rateLimitError) {
           this.logger.warn("Global rate limit exceeded", { clientIp });
-          return reply.code(429).send({ 
-            error: "Too many requests", 
-            message: "Rate limit exceeded. Please try again later." 
+          return reply.code(429).send({
+            error: "Too many requests",
+            message: "Rate limit exceeded. Please try again later."
           });
         }
 
@@ -279,36 +304,52 @@ export class IntegrationServer {
       },
     );
 
-    // Session management endpoints
-    this.app.get("/sessions", async () => {
+    // Session management endpoints (secured)
+    this.app.get("/sessions", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       const sessions = await this.sessionManager.listSessions();
       return { sessions };
     });
 
-    this.app.get("/sessions/active", async () => {
+    this.app.get("/sessions/active", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       const sessions = await this.sessionManager.listActiveSessions();
       return { sessions };
     });
 
     this.app.get(
       "/sessions/:id",
+      {
+        preHandler: (req, reply, done) => {
+          this.requireApiKey(req, reply);
+          done();
+        }
+      },
       async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
         const sessionId = request.params.id;
-        
+
         // Validate session ID format
         if (!SecurityUtils.isValidSessionId(sessionId)) {
           this.logger.warn("Invalid session ID format", { sessionId });
-          return reply.code(400).send({ 
-            error: "Invalid request", 
-            message: "Invalid session ID format" 
+          return reply.code(400).send({
+            error: "Invalid request",
+            message: "Invalid session ID format"
           });
         }
-        
+
         const session = await this.sessionManager.getSession(sessionId);
         if (!session) {
-          return reply.code(404).send({ 
-            error: "Not found", 
-            message: "Session not found" 
+          return reply.code(404).send({
+            error: "Not found",
+            message: "Session not found"
           });
         }
         return { session };
@@ -317,25 +358,36 @@ export class IntegrationServer {
 
     this.app.delete(
       "/sessions/:id",
+      {
+        preHandler: (req, reply, done) => {
+          this.requireApiKey(req, reply);
+          done();
+        }
+      },
       async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
         const sessionId = request.params.id;
-        
+
         // Validate session ID format
         if (!SecurityUtils.isValidSessionId(sessionId)) {
           this.logger.warn("Invalid session ID format", { sessionId });
-          return reply.code(400).send({ 
-            error: "Invalid request", 
-            message: "Invalid session ID format" 
+          return reply.code(400).send({
+            error: "Invalid request",
+            message: "Invalid session ID format"
           });
         }
-        
+
         await this.sessionManager.cancelSession(sessionId);
         return { cancelled: true };
       },
     );
 
-    // Statistics endpoint
-    this.app.get("/stats", async () => {
+    // Statistics endpoint (secured)
+    this.app.get("/stats", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       const sessionStats = await this.sessionManager.getStats();
       return {
         sessions: sessionStats,
@@ -350,8 +402,13 @@ export class IntegrationServer {
       };
     });
 
-    // Configuration endpoint (read-only)
-    this.app.get("/config", async () => {
+    // Configuration endpoint (read-only, secured)
+    this.app.get("/config", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       return {
         linearOrganizationId: this.config.linearOrganizationId,
         projectRootDir: this.config.projectRootDir,
@@ -363,21 +420,37 @@ export class IntegrationServer {
         hasLinearToken: !!this.config.linearApiToken,
         hasWebhookSecret: !!this.config.webhookSecret,
         hasAgentUser: !!this.config.agentUserId,
+        hasApiKey: !!this.config.apiKey,
       };
     });
     
-    // Security monitoring endpoints
-    this.app.get("/security/metrics", async () => {
+    // Security monitoring endpoints (secured)
+    this.app.get("/security/metrics", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       const metrics = await this.securityMonitor.getMetrics();
       return { metrics };
     });
-    
-    this.app.get("/security/alerts", async () => {
+
+    this.app.get("/security/alerts", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       const alerts = await this.securityMonitor.getAlerts();
       return { alerts };
     });
-    
-    this.app.get("/security/events", async () => {
+
+    this.app.get("/security/events", {
+      preHandler: (req, reply, done) => {
+        this.requireApiKey(req, reply);
+        done();
+      }
+    }, async () => {
       const events = await this.securityAgent.getSecurityEvents();
       return { events };
     });
