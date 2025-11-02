@@ -47,6 +47,21 @@ export class GitWorktreeManager {
     });
 
     try {
+      // Fetch latest changes from origin
+      this.logger.info("Fetching latest changes from origin", { baseBranch });
+      await this.executeGitCommand(["fetch", "origin"], this.projectRoot);
+
+      // Reset base branch to origin/baseBranch to ensure we have latest code
+      this.logger.info(`Resetting ${baseBranch} to origin/${baseBranch}`, { baseBranch });
+      await this.executeGitCommand(
+        ["checkout", baseBranch],
+        this.projectRoot,
+      );
+      await this.executeGitCommand(
+        ["reset", "--hard", `origin/${baseBranch}`],
+        this.projectRoot,
+      );
+
       // Ensure worktree base directory exists
       await fs.mkdir(this.worktreeBaseDir, { recursive: true });
 
