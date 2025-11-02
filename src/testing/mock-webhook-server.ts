@@ -10,6 +10,7 @@
  */
 
 import { EventEmitter } from "events";
+import { vi } from "vitest";
 import type {
   LinearWebhookEvent,
   ProcessedEvent,
@@ -47,8 +48,21 @@ export class MockWebhookServer extends EventEmitter {
     super();
     this.config = { ...mockIntegrationConfig, ...config };
     this.logger = createMockLogger();
+
+    // Create mock storage for session manager
+    const mockStorage = {
+      save: vi.fn().mockResolvedValue(undefined),
+      load: vi.fn().mockResolvedValue(null),
+      loadByIssue: vi.fn().mockResolvedValue(null),
+      list: vi.fn().mockResolvedValue([]),
+      listActive: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      cleanupOldSessions: vi.fn().mockResolvedValue(0),
+    };
+
     this.webhookHandler = new LinearWebhookHandler(this.config, this.logger);
-    this.sessionManager = new SessionManager(this.config, this.logger);
+    this.sessionManager = new SessionManager(this.config, this.logger, mockStorage);
   }
 
   /**

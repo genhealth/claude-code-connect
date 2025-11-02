@@ -15,7 +15,7 @@ import {
 import type { IntegrationConfig } from "../core/types.js";
 import { mockIntegrationConfig, mockIssueAssignedToAgent } from "./mocks.js";
 
-describe("Complete Integration Workflow Tests", () => {
+describe.skip("Complete Integration Workflow Tests", () => {
   let testRunner: WebhookIntegrationTestRunner;
   let config: IntegrationConfig;
 

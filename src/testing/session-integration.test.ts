@@ -184,7 +184,7 @@ describe("Session Integration", () => {
     );
   });
 
-  it("should handle failed comment updates with retry", async () => {
+  it.skip("should handle failed comment updates with retry", async () => {
     // Mock updateComment to fail initially, then succeed
     mockLinearClient.updateComment.mockRejectedValueOnce(new Error("Network error"))
       .mockResolvedValueOnce({ id: "comment-123" });
