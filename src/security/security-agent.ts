@@ -3,7 +3,7 @@
  * Provides comprehensive security monitoring, validation, and threat detection
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { join, resolve, relative } from "path";
 import { promises as fs } from "fs";
 import type {
@@ -540,11 +540,13 @@ export class SecurityAgent {
     }
 
     try {
-      const expectedSignature = createHash("sha256")
-        .update(this.config.webhookSecret + payload)
+      // Linear uses HMAC-SHA256 for webhook signatures
+      const expectedSignature = createHmac("sha256", this.config.webhookSecret)
+        .update(payload)
         .digest("hex");
 
-      const actualSignature = signature.replace("sha256=", "");
+      // Linear sends signature without prefix, just raw hex
+      const actualSignature = signature.trim();
 
       return timingSafeEqual(
         Buffer.from(expectedSignature, "hex"),
@@ -749,7 +751,11 @@ export class SecurityAgent {
     }
 
     // Sort by timestamp (newest first)
-    events.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    events.sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bTime - aTime;
+    });
 
     if (limit) {
       events = events.slice(0, limit);

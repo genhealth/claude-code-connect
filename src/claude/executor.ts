@@ -107,18 +107,25 @@ export class ClaudeExecutor {
     promptFile: string,
   ): Promise<{ output: string; error?: string; exitCode: number }> {
     const { session, config, workingDir } = context;
-    const claudePath = config.claudeCodePath || "claude-code";
+    const claudePath = config.claudeExecutablePath || "claude";
+
+    // Read the prompt from file
+    const prompt = await fs.readFile(promptFile, "utf-8");
 
     return new Promise((resolve, reject) => {
-      const args = ["--prompt-file", promptFile, "--working-dir", workingDir];
+      // Use shell to redirect prompt file to stdin
+      // This avoids command line length limits and escaping issues
+      const shellCommand = `${claudePath} --disallowedTools NotebookRead NotebookEdit --dangerously-skip-permissions < ${promptFile}`;
 
-      this.logger.debug("Spawning Claude process", {
-        command: claudePath,
-        args,
+      this.logger.info("Spawning Claude process", {
+        command: shellCommand,
+        workingDir,
+        promptFile,
+        promptLength: prompt.length,
         sessionId: session.id,
       });
 
-      const claudeProcess = spawn(claudePath, args, {
+      const claudeProcess = spawn("sh", ["-c", shellCommand], {
         cwd: workingDir,
         stdio: "pipe",
         env: {
@@ -138,21 +145,27 @@ export class ClaudeExecutor {
       claudeProcess.stdout?.on("data", (data) => {
         const chunk = data.toString();
         output += chunk;
+        // Log Claude's output in real-time
+        console.log(`[Claude ${session.id.substring(0, 8)}] ${chunk}`);
         this.logger.debug("Claude stdout", { sessionId: session.id, chunk });
       });
 
       claudeProcess.stderr?.on("data", (data) => {
         const chunk = data.toString();
         errorOutput += chunk;
-        this.logger.debug("Claude stderr", { sessionId: session.id, chunk });
+        // Log Claude's errors in real-time
+        console.error(`[Claude ${session.id.substring(0, 8)} ERROR] ${chunk}`);
+        this.logger.warn("Claude stderr", { sessionId: session.id, chunk });
       });
 
       claudeProcess.on("close", (code) => {
         this.activeProcesses.delete(session.id);
 
-        this.logger.debug("Claude process finished", {
+        this.logger.info("🏁 Claude process finished", {
           sessionId: session.id,
           exitCode: code,
+          outputLength: output.length,
+          errorLength: errorOutput.length
         });
 
         resolve({
@@ -203,83 +216,33 @@ export class ClaudeExecutor {
   private async generatePrompt(
     context: ClaudeExecutionContext,
   ): Promise<string> {
-    const { issue, triggerComment, session } = context;
+    const { issue, triggerComment } = context;
 
     const issueDescription = issue.description || "No description provided";
     const triggerText = triggerComment?.body || "";
 
-    const prompt = `
-# Linear Issue: ${issue.identifier} - ${issue.title}
+    this.logger.info("Generating prompt for Claude", {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      hasDescription: !!issue.description,
+      descriptionLength: issue.description?.length || 0,
+      hasTriggerComment: !!triggerComment,
+      triggerCommentLength: triggerComment?.body?.length || 0,
+    });
 
-## Issue Description
+    const prompt = `
+# ${issue.identifier}: ${issue.title}
+
 ${issueDescription}
 
-${
-  triggerComment
-    ? `
-## Trigger Comment
-${triggerText}
-`
-    : ""
-}
-
-## Context
-- **Issue ID**: ${issue.id}
-- **Issue URL**: ${issue.url}
-- **Session ID**: ${session.id}
-- **Working Directory**: ${session.workingDir}
-${session.branchName ? `- **Git Branch**: ${session.branchName}` : ""}
-
-## Instructions
-
-You are Claude, an AI assistant helping with software development tasks in Linear. You have been assigned to work on this issue.
-
-### Your Task
-${
-  triggerComment
-    ? "Analyze the trigger comment above and follow the instructions provided there."
-    : "Analyze the issue description and implement the requested changes."
-}
-
-### Guidelines
-1. **Read the issue carefully** - Understand what needs to be done
-2. **Explore the codebase** - Use file operations to understand the project structure  
-3. **Make targeted changes** - Focus on the specific requirements
-4. **Test your changes** - Run tests if available
-5. **Follow code standards** - Maintain consistency with existing code
-6. **Commit your work** - Make clear, descriptive git commits
-
-### Available Tools
-You have access to all standard Claude Code tools:
-- File operations (Read, Write, Edit, etc.)
-- Git operations (via Bash tool)
-- Code analysis and search tools
-- Testing and build tools
-
-### Working Directory
-You are working in: ${session.workingDir}
-
-${
-  session.branchName
-    ? `
-### Git Branch
-A new branch has been created for this work: ${session.branchName}
-All changes should be committed to this branch.
-`
-    : ""
-}
-
-### Completion
-When you're done:
-1. Ensure all changes are committed
-2. Verify tests pass (if applicable)
-3. Provide a summary of what was implemented
-4. The system will automatically report back to Linear
-
----
-
-**Important**: Focus on delivering working, tested code that addresses the issue requirements. Be thorough but efficient.
+${triggerComment ? `\n---\n\nComment:\n${triggerText}` : ""}
     `.trim();
+
+    this.logger.info("Generated prompt", {
+      promptLength: prompt.length,
+      promptPreview: prompt.substring(0, 200),
+    });
 
     return prompt;
   }
@@ -300,13 +263,20 @@ When you're done:
       // Ensure working directory exists
       await fs.mkdir(workingDir, { recursive: true });
 
-      // Copy project files if working directory is different from project root
-      if (resolve(workingDir) !== resolve(projectRoot)) {
-        await this.copyProjectFiles(projectRoot, workingDir);
-      }
+      // Check if this is a git worktree (already has .git file)
+      const isWorktree = await this.isGitWorktree(workingDir);
 
-      // Ensure git is initialized
-      await this.ensureGitRepo(workingDir);
+      if (!isWorktree) {
+        this.logger.debug("Not a git worktree, copying project files");
+        // Copy project files if working directory is different from project root
+        if (resolve(workingDir) !== resolve(projectRoot)) {
+          await this.copyProjectFiles(projectRoot, workingDir);
+        }
+        // Ensure git is initialized
+        await this.ensureGitRepo(workingDir);
+      } else {
+        this.logger.debug("Using existing git worktree", { workingDir });
+      }
     } catch (error) {
       this.logger.error("Failed to prepare working directory", error as Error, {
         workingDir,
@@ -349,6 +319,32 @@ When you're done:
         target,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Check if directory is a git worktree
+   */
+  private async isGitWorktree(workingDir: string): Promise<boolean> {
+    try {
+      const gitPath = join(workingDir, ".git");
+      const stats = await fs.stat(gitPath);
+
+      // Git worktrees have a .git file (not directory) pointing to the main repo
+      if (stats.isFile()) {
+        return true;
+      }
+
+      // Also check if it's a regular git directory with files
+      if (stats.isDirectory()) {
+        const headPath = join(gitPath, "HEAD");
+        await fs.access(headPath);
+        return true;
+      }
+
+      return false;
+    } catch {
+      return false;
     }
   }
 
